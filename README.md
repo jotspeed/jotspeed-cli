@@ -13,7 +13,7 @@ The CLI talks to the same encrypted backup as [app.jotspeed.com](https://app.jot
 Node.js 22 or newer.
 
 ```bash
-npm install -g github:jimmyhess/jotspeed-cli
+npm install -g github:jotspeed/jotspeed-cli
 jot login
 ```
 

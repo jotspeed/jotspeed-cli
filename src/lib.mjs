@@ -271,7 +271,7 @@ export function parseArgv(argv) {
 export function usage() {
   return `jot — Jotspeed on the command line (Pro)
 
-Install:  npm install -g github:jimmyhess/jotspeed-cli
+Install:  npm install -g github:jotspeed/jotspeed-cli
 Sign in:  jot login
 
 Write
