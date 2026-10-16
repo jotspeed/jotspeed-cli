@@ -213,6 +213,11 @@ async function main() {
     stdout.write("Signed out.\n");
     return;
   }
+  if (parsed.cmd === "mcp") {
+    const { serve } = await import("./mcp.mjs");
+    await serve();
+    return;
+  }
   if (parsed.cmd === "import") {
     await cmdImport(parsed);
     return;

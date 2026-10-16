@@ -13,13 +13,21 @@ The CLI talks to the same encrypted backup as [app.jotspeed.com](https://app.jot
 Node.js 22 or newer.
 
 ```bash
-npm install -g github:jotspeed/jotspeed-cli
+curl -fsSL https://jotspeed.com/cli/install.sh | bash
 jot login
+```
+
+The script runs `npm install -g`. If Node comes from mise, nvm, fnm, or asdf, it installs under `~/.local` instead. A global install inside a versioned Node prefix is removed on the next Node upgrade, and mise then fails with `No version is set for shim: jot`.
+
+With a system Node, this also works:
+
+```bash
+npm install -g github:jotspeed/jotspeed-cli
 ```
 
 Password is stored in the OS keychain (libsecret on Linux, Keychain on macOS), not in a config file. The AES key is derived once at login and reused so each jot does not re-run PBKDF2.
 
-If `jot` is not found, add `$(npm prefix -g)/bin` to your `PATH`.
+If `jot` is not found, add `~/.local/bin` or `$(npm prefix -g)/bin` to your `PATH`.
 
 ## Use
 
@@ -34,6 +42,39 @@ jot logout
 ```
 
 `jot --help` lists filters, export, edit, and import.
+
+## Agents
+
+`jot mcp` is a local [MCP](https://modelcontextprotocol.io/) server. It uses the same sign-in as `jot login`. The encryption key stays in the OS keychain. The sync server never sees plaintext.
+
+```bash
+jot mcp
+```
+
+Tools: `post`, `search`, `get`, `status`. Post only when asked. The server cannot edit or delete.
+
+Grok (`~/.grok/config.toml`):
+
+```toml
+[mcp_servers.jotspeed]
+command = "jot"
+args = ["mcp"]
+```
+
+OpenCode:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "jotspeed": {
+        "type": "local",
+        "command": ["jot", "mcp"]
+      }
+    }
+  }
+}
+```
 
 ## Security
 
