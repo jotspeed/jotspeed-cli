@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgv, usage, saveConfig, loadConfig, configPath, addJot, selectJots, formatJots, splitWhen } from "../src/lib.mjs";
+import { parseArgv, usage, saveConfig, loadConfig, configPath, addJot, selectJots, formatJots, splitWhen, refreshEntitlement } from "../src/lib.mjs";
 import { parseDate } from "../src/dates.mjs";
 import { encryptPayload, newSalt } from "../src/crypto.js";
 import { makeJot } from "../src/core.js";
@@ -37,7 +37,7 @@ test("usage mentions jot login and -1", () => {
   const text = usage();
   assert.match(text, /jot login/);
   assert.match(text, /jot -1/);
-  assert.match(text, /jotspeed-cli/);
+  assert.match(text, /install\.sh/);
 });
 
 test("parseDate understands yesterday and ISO days", () => {
@@ -88,6 +88,29 @@ test("config writes 600 under XDG_CONFIG_HOME", async () => {
   const loaded = await loadConfig(env);
   assert.equal(loaded.token, "t");
   await rm(dir, { recursive: true, force: true });
+});
+
+test("refreshEntitlement stores a Pro flag the server already granted", async () => {
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /\/v1\/me$/);
+    return new Response(JSON.stringify({ entitled: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const dir = await mkdtemp(join(tmpdir(), "jot-"));
+  try {
+    const env = { XDG_CONFIG_HOME: dir, HOME: dir, JOTSPEED_KEYCHAIN: "memory" };
+    await saveConfig({ email: "a@b.com", token: "tok", entitled: false, syncUrl: "https://sync.test" }, env);
+    const cfg = await loadConfig(env);
+    await refreshEntitlement(cfg, env);
+    assert.equal(cfg.entitled, true);
+    assert.equal((await loadConfig(env)).entitled, true);
+  } finally {
+    globalThis.fetch = prev;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("addJot refuses to run without a session", async () => {

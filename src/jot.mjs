@@ -219,6 +219,11 @@ async function main() {
     stdout.write(`Synced. ${j.jots.filter((e) => !e.deletedAt).length} entries${j.inboxMerged ? `, ${j.inboxMerged} new from agents` : ""}.\n`);
     return;
   }
+  if (parsed.cmd === "mcp") {
+    const { serve } = await import("./mcp.mjs");
+    await serve();
+    return;
+  }
   if (parsed.cmd === "import") {
     await cmdImport(parsed);
     return;

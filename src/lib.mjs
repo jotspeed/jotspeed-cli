@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { makeJot, stamp, toTxt, parseJrnl, uniqueTags, tombstone, mergeJots } from "./core.js";
-import { continueAccount, pullBlob, pushBlob } from "./sync.js";
+import { continueAccount, pullBlob, pushBlob, me } from "./sync.js";
 import { deriveEncBits, encryptWithBits, decryptWithBits, bytesToB64, b64ToBytes } from "./crypto.js";
 import { parseDate, dayBounds, isoDay } from "./dates.mjs";
 import { setSecret, getSecret, deleteSecret, keychainAccount } from "./keychain.mjs";
@@ -90,6 +90,7 @@ export function parseArgv(argv) {
     if (a === "login" && i === 0 && args.length === 1) return { ...out, cmd: "login" };
     if (a === "logout" && i === 0 && args.length === 1) return { ...out, cmd: "logout" };
     if (a === "sync" && i === 0 && args.length === 1) return { ...out, cmd: "sync" };
+    if (a === "mcp" && i === 0 && args.length === 1) return { ...out, cmd: "mcp" };
     if (a === "--import") {
       out.action.import = true;
       viewing = true;
@@ -273,7 +274,7 @@ export function parseArgv(argv) {
 export function usage() {
   return `jot — Jotspeed on the command line (Pro)
 
-Install:  npm install -g github:jotspeed/jotspeed-cli
+Install:  curl -fsSL https://jotspeed.com/cli/install.sh | bash
 Sign in:  jot login
 
 Write
@@ -306,6 +307,9 @@ Edit
 
 Import a text export
   jot --import --file journal.txt
+
+Agents
+  jot mcp                local MCP server (stdio). Same sign-in as jot login.
 
 Other
   jot logout
@@ -376,8 +380,26 @@ export async function sessionBits(cfg) {
   return bits;
 }
 
-function requireSession(cfg) {
+export async function refreshEntitlement(cfg, env = process.env) {
+  if (!cfg?.token) return cfg;
+  try {
+    const data = await me(cfg.syncUrl || DEFAULT_SYNC, cfg.token);
+    if (typeof data?.entitled !== "boolean") return cfg;
+    if (Boolean(cfg.entitled) !== data.entitled) {
+      cfg.entitled = data.entitled;
+      await saveConfig(cfg, env);
+    } else {
+      cfg.entitled = data.entitled;
+    }
+  } catch {
+    // Keep the cached flag if the account check cannot be reached.
+  }
+  return cfg;
+}
+
+async function requireSession(cfg, env = process.env) {
   if (!cfg?.token) throw new Error("Not signed in. Run: jot login");
+  if (!cfg.entitled) await refreshEntitlement(cfg, env);
   if (!cfg.entitled) throw new Error("The CLI is a Pro feature. Subscribe in the app, then jot login.");
 }
 
@@ -416,15 +438,16 @@ async function writeCache(bits, payload, env) {
 }
 
 async function loadJournalRaw(cfg, env = process.env) {
-  requireSession(cfg);
+  await requireSession(cfg, env);
   const bits = await sessionBits(cfg);
   const cached = await readCache(bits, env);
   try {
-    const remote = await pullBlob(cfg.syncUrl || DEFAULT_SYNC, cfg.token, cfg.rev || 0);
+    let remote = await pullBlob(cfg.syncUrl || DEFAULT_SYNC, cfg.token, cfg.rev || 0);
     if (!remote.payload) {
       if (cached?.jots) return { jots: cached.jots, rev: cached.rev || cfg.rev || 0, bits };
-      return { jots: [], rev: remote.rev || 0, bits };
+      if (remote.notModified) remote = await pullBlob(cfg.syncUrl || DEFAULT_SYNC, cfg.token);
     }
+    if (!remote.payload) return { jots: [], rev: remote.rev || cfg.rev || 0, bits };
     const decoded = await decryptWithBits(bits, remote.payload);
     const jots = decoded.jots || [];
     const rev = remote.rev || 0;
@@ -479,7 +502,7 @@ export async function loadJournal(cfg, env = process.env) {
 }
 
 export async function saveJournal(cfg, jots, rev, bits, env = process.env) {
-  requireSession(cfg);
+  await requireSession(cfg, env);
   const key = bits || (await sessionBits(cfg));
   const payload = await encryptWithBits(key, { jots });
   const saved = await pushBlob(cfg.syncUrl || DEFAULT_SYNC, cfg.token, rev, payload);
@@ -514,13 +537,17 @@ export function splitWhen(text) {
   return { when, body: m[3].trim(), starred: Boolean(m[1]) };
 }
 
-export async function addJot(text, cfg) {
+export async function addJot(text, cfg, extra = {}) {
   const raw = String(text || "").trim();
   if (!raw) throw new Error("Empty entry.");
-  requireSession(cfg);
+  await requireSession(cfg);
   const { when, body, starred } = splitWhen(raw);
-  const jot = makeJot(body, { createdAt: when ? when.getTime() : undefined, starred });
   const { jots, rev, bits } = await loadJournal(cfg);
+  if (extra.id) {
+    const existing = jots.find((e) => e.id === extra.id && !e.deletedAt);
+    if (existing) return { jot: existing, datetime: stamp(existing.createdAt).datetime, duplicate: true };
+  }
+  const jot = makeJot(body, { createdAt: when ? when.getTime() : undefined, starred, id: extra.id || undefined });
   const merged = mergeJots([jot], jots);
   await saveJournal(cfg, merged, rev, bits);
   const { datetime } = stamp(jot.createdAt);
@@ -643,7 +670,7 @@ export function formatJots(jots, display = {}) {
 }
 
 export async function importText(text, cfg) {
-  requireSession(cfg);
+  await requireSession(cfg);
   const incoming = parseJrnl(text);
   if (!incoming.length) throw new Error("No entries found in that file.");
   const { jots, rev } = await loadJournal(cfg);
