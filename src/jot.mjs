@@ -213,6 +213,12 @@ async function main() {
     stdout.write("Signed out.\n");
     return;
   }
+  if (parsed.cmd === "sync") {
+    const cfg = await loadConfig();
+    const j = await loadJournal(cfg);
+    stdout.write(`Synced. ${j.jots.filter((e) => !e.deletedAt).length} entries${j.inboxMerged ? `, ${j.inboxMerged} new from agents` : ""}.\n`);
+    return;
+  }
   if (parsed.cmd === "import") {
     await cmdImport(parsed);
     return;

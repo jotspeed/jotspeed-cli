@@ -6,6 +6,7 @@ import { continueAccount, pullBlob, pushBlob } from "./sync.js";
 import { deriveEncBits, encryptWithBits, decryptWithBits, bytesToB64, b64ToBytes } from "./crypto.js";
 import { parseDate, dayBounds, isoDay } from "./dates.mjs";
 import { setSecret, getSecret, deleteSecret, keychainAccount } from "./keychain.mjs";
+import { ensureInboxKey, drainInbox, ackInbox } from "./inbox.js";
 
 export const DEFAULT_SYNC = "https://sync.jotspeed.com";
 
@@ -88,6 +89,7 @@ export function parseArgv(argv) {
     const a = args[i];
     if (a === "login" && i === 0 && args.length === 1) return { ...out, cmd: "login" };
     if (a === "logout" && i === 0 && args.length === 1) return { ...out, cmd: "logout" };
+    if (a === "sync" && i === 0 && args.length === 1) return { ...out, cmd: "sync" };
     if (a === "--import") {
       out.action.import = true;
       viewing = true;
@@ -307,6 +309,7 @@ Import a text export
 
 Other
   jot logout
+  jot sync                         Pull entries posted by connected agents (JotSpeed MCP)
   jot --version
 `;
 }
@@ -412,7 +415,7 @@ async function writeCache(bits, payload, env) {
   await writeFile(cachePath(env), JSON.stringify(packed), { mode: 0o600 });
 }
 
-export async function loadJournal(cfg, env = process.env) {
+async function loadJournalRaw(cfg, env = process.env) {
   requireSession(cfg);
   const bits = await sessionBits(cfg);
   const cached = await readCache(bits, env);
@@ -441,6 +444,38 @@ export async function loadJournal(cfg, env = process.env) {
     }
     throw err;
   }
+}
+
+/**
+ * Merge entries that post-only agents (JotSpeed MCP) sealed into the inbox.
+ * Never throws: inbox trouble must not block normal journal use.
+ */
+export async function mergeInbox(cfg, journal, env = process.env) {
+  const base = cfg.syncUrl || DEFAULT_SYNC;
+  try {
+    const key = await ensureInboxKey({
+      base,
+      token: cfg.token,
+      wrapFn: (obj) => encryptWithBits(journal.bits, obj),
+      unwrapFn: (packed) => decryptWithBits(journal.bits, packed),
+    });
+    if (!key) return { ...journal, inboxMerged: 0 };
+    const { jots, ids } = await drainInbox({ base, token: cfg.token, key });
+    if (!jots.length) return { ...journal, inboxMerged: 0 };
+    const merged = mergeJots(journal.jots, jots);
+    const rev = await saveJournal(cfg, merged, journal.rev, journal.bits, env);
+    await ackInbox({ base, token: cfg.token, ids }).catch(() => {});
+    return { jots: merged, rev, bits: journal.bits, inboxMerged: jots.length };
+  } catch (err) {
+    if (env.JOTSPEED_DEBUG) console.error("inbox:", err);
+    return { ...journal, inboxMerged: 0 };
+  }
+}
+
+export async function loadJournal(cfg, env = process.env) {
+  const journal = await loadJournalRaw(cfg, env);
+  if (env.JOTSPEED_NO_INBOX) return journal;
+  return mergeInbox(cfg, journal, env);
 }
 
 export async function saveJournal(cfg, jots, rev, bits, env = process.env) {
